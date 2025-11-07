@@ -155,4 +155,4 @@ def main():
             st.dataframe(pd.DataFrame(top_pairs, columns=["Sayı 1", "Sayı 2", "Birlikte Çıkma Skoru"]).round(3))
 
 if __name__ == "__main__":
-    main() 
+    main()
