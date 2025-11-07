@@ -1,136 +1,84 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import random
-from itertools import combinations
+import io
+import requests
 
-# -------------------------------
-# 📘 UYGULAMA AYARLARI
-# -------------------------------
-st.set_page_config(page_title="Şans Topu Tahmin Botu v3", page_icon="🎱", layout="centered")
-st.title("🎯 Şans Topu Tahmin Botu v3")
-st.markdown("Yapay zeka destekli tahmin sistemi (Markov + birlikte çıkma + zaman ağırlığı)")
+st.set_page_config(page_title="Şans Topu Tahmin Botu", page_icon="🎱", layout="centered")
 
-# -------------------------------
-# 📂 VERİ YÜKLEME SİSTEMİ
-# -------------------------------
-st.sidebar.header("📊 Veri Kaynağı")
-veri_kaynak = st.sidebar.radio("Veriyi nasıl yüklemek istersiniz?", ("GitHub Raw Link", "CSV Yükleme"))
+st.title("🎱 Şans Topu Tahmin Botu")
+st.write("Geçmiş çekiliş verilerini kullanarak Markov zinciri mantığında tahminler üretir.")
 
-if "df" not in st.session_state:
-    st.session_state["df"] = None
+# --- Veri Kaynağı Seçimi ---
+st.sidebar.header("Veri Kaynağı Seç")
+veri_tipi = st.sidebar.radio("Veriyi nasıl yüklemek istersiniz?", ["📁 CSV Yükle", "🌐 GitHub Raw Link"])
 
-if veri_kaynak == "GitHub Raw Link":
-    github_url = st.sidebar.text_input(
-        "GitHub Raw CSV linki:",
-        "https://raw.githubusercontent.com/mhmtal04/SansTopu/main/sans_topu_ornek_veri.csv"
-    )
-    if st.sidebar.button("📥 GitHub'dan Veriyi Yükle"):
+df = None
+
+if veri_tipi == "📁 CSV Yükle":
+    uploaded_file = st.sidebar.file_uploader("CSV dosyanızı yükleyin", type=["csv"])
+    if uploaded_file:
+        df = pd.read_csv(uploaded_file)
+elif veri_tipi == "🌐 GitHub Raw Link":
+    raw_url = st.sidebar.text_input("GitHub Raw CSV bağlantısını girin:")
+    if st.sidebar.button("Veriyi Getir") and raw_url:
         try:
-            df = pd.read_csv(github_url)
-            st.session_state["df"] = df
-            st.success("✅ Veri başarıyla yüklendi.")
+            response = requests.get(raw_url)
+            response.raise_for_status()
+            df = pd.read_csv(io.StringIO(response.text))
+            st.success("✅ Veriler başarıyla yüklendi!")
         except Exception as e:
-            st.error(f"Veri yüklenemedi: {e}")
-else:
-    uploaded_file = st.sidebar.file_uploader("📁 CSV Dosyası Yükle", type=["csv"])
-    if uploaded_file is not None:
-        try:
-            df = pd.read_csv(uploaded_file)
-            st.session_state["df"] = df
-            st.success("✅ Dosya başarıyla yüklendi.")
-        except Exception as e:
-            st.error(f"Hata: {e}")
+            st.error(f"❌ Veri alınamadı: {e}")
 
-# -------------------------------
-# 📈 VERİ ÖNİZLEME
-# -------------------------------
-if st.session_state["df"] is not None and not st.session_state["df"].empty:
-    df = st.session_state["df"]
-    st.subheader("📅 Son 10 Çekiliş")
-    st.dataframe(df.tail(10), use_container_width=True)
+# --- Veri Kontrolü ---
+if df is not None:
+    try:
+        df.columns = ["Date", "Num1", "Num2", "Num3", "Num4", "Num5", "Joker"]
+        df = df.dropna().reset_index(drop=True)
+        st.subheader("📊 Son 10 Çekiliş")
+        st.dataframe(df.tail(10))
 
-    # -------------------------------
-    # 🔢 YARDIMCI FONKSİYONLAR
-    # -------------------------------
-    def get_weights(dates):
-        """Yeni tarihlere daha fazla ağırlık verir"""
-        dates = pd.to_datetime(dates)
-        days_ago = (dates.max() - dates).dt.days
-        max_days = days_ago.max() + 1
-        return (max_days - days_ago) / max_days
+        # --- Sayı Frekans Analizi ---
+        all_numbers = df[["Num1", "Num2", "Num3", "Num4", "Num5"]].values.flatten()
+        freq = pd.Series(all_numbers).value_counts().sort_index()
+        st.bar_chart(freq)
 
-    def birlikte_cikma(df):
-        """Birlikte çıkan sayı çiftlerinin frekansı"""
-        pair_freq = {}
+        # --- Birlikte Çıkma Analizi ---
+        co_occurrence = {}
         for _, row in df.iterrows():
-            nums = [row["Num1"], row["Num2"], row["Num3"], row["Num4"], row["Num5"]]
-            for a, b in combinations(nums, 2):
-                pair = tuple(sorted((a, b)))
-                pair_freq[pair] = pair_freq.get(pair, 0) + 1
-        return pair_freq
+            numbers = row[["Num1", "Num2", "Num3", "Num4", "Num5"]].tolist()
+            for i in range(len(numbers)):
+                for j in range(i + 1, len(numbers)):
+                    pair = tuple(sorted([numbers[i], numbers[j]]))
+                    co_occurrence[pair] = co_occurrence.get(pair, 0) + 1
+        co_df = pd.DataFrame(
+            [{"Sayı1": k[0], "Sayı2": k[1], "Birlikte Çıkma": v} for k, v in co_occurrence.items()]
+        ).sort_values(by="Birlikte Çıkma", ascending=False)
+        st.subheader("🤝 En Çok Birlikte Çıkan Sayılar")
+        st.dataframe(co_df.head(10))
 
-    def markov_matrix(df):
-        """Markov geçiş matrisi (bir sayıdan sonra gelen sayılar)"""
-        mat = np.zeros((36, 36))
-        for i in range(1, len(df)):
-            prev = [df.iloc[i-1][f"Num{j}"] for j in range(1,6)]
-            curr = [df.iloc[i][f"Num{j}"] for j in range(1,6)]
-            for a in prev:
-                for b in curr:
-                    mat[a][b] += 1
-        row_sums = mat.sum(axis=1, keepdims=True)
-        mat = np.divide(mat, row_sums, out=np.zeros_like(mat), where=row_sums != 0)
-        return mat
+        # --- Markov Temelli Tahmin ---
+        def generate_prediction(df, num_predictions=4):
+            all_numbers = df[["Num1", "Num2", "Num3", "Num4", "Num5"]].values.flatten()
+            freq = pd.Series(all_numbers).value_counts(normalize=True)
+            predictions = []
+            for _ in range(num_predictions):
+                pick = np.random.choice(freq.index, size=5, replace=False, p=freq.values)
+                pick.sort()
+                joker = np.random.choice(df["Joker"])
+                predictions.append({"Tahmin": list(pick), "Joker": joker})
+            return predictions
 
-    # -------------------------------
-    # 🧮 MODEL HESAPLAMALARI
-    # -------------------------------
-    weights = get_weights(df["Date"])
-    pair_freq = birlikte_cikma(df)
-    markov = markov_matrix(df)
+        if st.button("🎯 Tahmin Üret"):
+            preds = generate_prediction(df)
+            st.success("Tahminler oluşturuldu!")
+            for i, p in enumerate(preds, 1):
+                st.write(f"**Tahmin {i}:** {p['Tahmin']} 🎰 Joker: {p['Joker']}")
 
-    # Sayı olasılıkları
-    freq = pd.Series(0, index=range(1, 36), dtype=float)
-    for idx, row in df.iterrows():
-        for n in [row["Num1"], row["Num2"], row["Num3"], row["Num4"], row["Num5"]]:
-            freq[n] += weights[idx]
-    single_prob = freq / freq.sum()
-
-    joker_freq = df["Joker"].value_counts(normalize=True)
-
-    # -------------------------------
-    # 🎰 TAHMİN ÜRETME
-    # -------------------------------
-    def tahmin_uret(n=3):
-        predictions = []
-        for _ in range(n):
-            combo = np.random.choice(range(1, 36), size=5, replace=False, p=single_prob.values)
-            combo = np.sort(combo)
-            joker = np.random.choice(joker_freq.index, p=joker_freq.values)
-            predictions.append((combo, joker))
-        return predictions
-
-    st.subheader("🎲 Tahmin Ayarları")
-    tahmin_sayisi = st.slider("Kaç tahmin üretilsin?", 1, 10, 4)
-
-    if st.button("🚀 Tahmin Üret"):
-        preds = tahmin_uret(tahmin_sayisi)
-        st.subheader("🔮 Üretilen Tahminler")
-        for i, (nums, joker) in enumerate(preds, 1):
-            sayilar = ", ".join(map(str, nums))
-            st.write(f"**Tahmin {i}:** {sayilar} 🎯 Joker: {joker}")
-
-    # -------------------------------
-    # 📊 ANALİZ GRAFİKLERİ
-    # -------------------------------
-    st.subheader("📊 En Sık Gelen Sayılar")
-    st.bar_chart(freq.sort_values(ascending=False).head(10))
-
-    st.subheader("🤝 En Çok Birlikte Çıkan Sayı Çiftleri")
-    top_pairs = sorted(pair_freq.items(), key=lambda x: x[1], reverse=True)[:5]
-    for (a, b), count in top_pairs:
-        st.write(f"{a} & {b} — {count} kez birlikte geldi")
-
+    except Exception as e:
+        st.error(f"Veri işlenirken hata oluştu: {e}")
 else:
-    st.info("👈 Lütfen önce bir CSV dosyası yükleyin veya GitHub Raw linki girin.")
+    st.info("Lütfen bir CSV yükleyin veya GitHub Raw bağlantısı girin.")
+
+st.markdown("---")
+st.caption("⚙️ Geliştirici: mhmtal04 | GPT-5 destekli Şans Topu Botu") 
