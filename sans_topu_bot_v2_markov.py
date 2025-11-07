@@ -57,7 +57,7 @@ def structured_pattern_score(combo, single_prob, pair_freq):
         pair_product *= val if val > 0 else 1e-6
     return single_product * pair_product
 
-def generate_predictions(df, single_prob, pair_freq, markov_probs, n_preds=3, trials=5000):
+def generate_predictions(df, single_prob, pair_freq, markov_probs, n_preds=3, trials=3000):
     """Tahmin üretici (Markov + ağırlıklı olasılıklar)."""
     predictions = []
     numbers_list = list(range(1, 35))
@@ -80,18 +80,23 @@ def generate_predictions(df, single_prob, pair_freq, markov_probs, n_preds=3, tr
         predictions.append((best_combo, joker, best_score))
     return predictions
 
+
 # =============================
 # 🎛️ Streamlit Arayüzü
 # =============================
 
 def main():
-    st.set_page_config(page_title="🎯 Şans Topu Tahmin Botu v4", page_icon="🎲", layout="centered")
-    st.title("🎯 Şans Topu Tahmin Botu v4 (Markov + Birlikte Çıkma + Ağırlıklandırma)")
+    st.set_page_config(page_title="🎯 Şans Topu Tahmin Botu v4.1", page_icon="🎲", layout="centered")
+    st.title("🎯 Şans Topu Tahmin Botu v4.1 (Markov + Birlikte Çıkma + Ağırlıklandırma)")
 
-    st.write("Bu bot geçmiş Şans Topu çekiliş verilerini analiz eder, birlikte çıkan sayı ilişkilerini ve Markov geçiş olasılıklarını kullanarak tahmin üretir.")
+    st.write("Geçmiş Şans Topu verilerini analiz eder, birlikte çıkan sayılar ve Markov geçiş olasılıklarını kullanarak tahmin üretir.")
     st.markdown("---")
 
-    # Veri yükleme seçimi
+    # Eğer df yoksa state'e ekle
+    if "df" not in st.session_state:
+        st.session_state.df = None
+
+    # Veri yükleme bölümü
     st.subheader("📂 Veri Yükleme")
     data_option = st.radio("Veri kaynağını seç:", ["🌐 GitHub (Raw) Link", "📁 CSV Dosyası Yükle"])
     df = None
@@ -103,6 +108,7 @@ def main():
             try:
                 content = requests.get(url).text
                 df = pd.read_csv(io.StringIO(content))
+                st.session_state.df = df
                 st.success("✅ GitHub verisi başarıyla yüklendi!")
             except Exception as e:
                 st.error(f"❌ Veri alınamadı: {e}")
@@ -111,9 +117,11 @@ def main():
         uploaded_file = st.file_uploader("Şans Topu CSV dosyasını yükleyin", type=["csv"])
         if uploaded_file is not None:
             df = pd.read_csv(uploaded_file)
+            st.session_state.df = df
             st.success("✅ Dosya başarıyla yüklendi!")
 
-    # Eğer veri yüklendiyse analiz et
+    # Analiz kısmı (df state'te varsa)
+    df = st.session_state.df
     if df is not None:
         try:
             df['Date'] = pd.to_datetime(df['Date'])
@@ -130,19 +138,18 @@ def main():
             pair_freq = pair_frequencies(df, 34)
             markov_probs = markov_chain(df, 34)
 
-        st.success("✅ Modeller hazır!")
-
         n_preds = st.number_input("🎲 Kaç tahmin üretmek istersiniz?", min_value=1, max_value=10, value=3, step=1)
 
         if st.button("🚀 Tahminleri Üret"):
             with st.spinner("Tahminler oluşturuluyor..."):
                 preds = generate_predictions(df, single_prob, pair_freq, markov_probs, n_preds=n_preds)
-            st.success("🎉 Tahminler hazır!")
 
+            st.success("🎉 Tahminler hazır!")
             for i, (combo, joker, score) in enumerate(preds):
                 st.write(f"**{i+1}. Tahmin:** {', '.join(map(str, combo))} 🎯 Joker: {joker}")
                 st.caption(f"Model Skoru: {score:.2e}")
 
+            # En çok birlikte çıkan sayıları göster
             st.markdown("---")
             st.subheader("📈 En Çok Birlikte Çıkan İlk 10 Sayı")
             top_pairs = []
